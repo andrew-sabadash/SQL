@@ -1,0 +1,80 @@
+with first_payments as -- 1 шаг
+( select user_id
+ , date_trunc('day', min(transaction_datetime)) as first_payment_date
+from skyeng_db.payments
+where status_name = 'success'
+group by 1
+),
+all_dates as ( -- 2 шаг 
+select distinct date_trunc ('day', class_start_datetime) as dt
+from skyeng_db.classes
+where  class_start_datetime < '2017-01-01'
+),
+all_dates_by_user as ( -- 3 шаг
+select user_id, dt
+from first_payments
+join all_dates 
+on dt >= first_payment_date
+),
+payments_by_dates as ( -- 4 шаг
+select 
+ user_id
+ ,date_trunc('day',transaction_datetime) payment_date
+ ,sum(classes) transaction_balance_change
+from skyeng_db.payments 
+where status_name = 'success' 
+group by 1,2
+),
+payments_by_dates_cumsum as ( -- 5 шаг
+select
+ all_dates_by_user.user_id
+ ,dt
+ ,coalesce(transaction_balance_change,0) as transaction_balance_change
+ ,sum(transaction_balance_change) over (partition by all_dates_by_user.user_id order by dt) transaction_balance_change_cs
+from all_dates_by_user
+left join payments_by_dates 
+on all_dates_by_user.user_id = payments_by_dates.user_id
+and dt = payment_date
+),
+classes_by_dates as (-- 6 шаг 
+select user_id
+    , date_trunc('day', class_start_datetime) class_date
+    , count(user_id)*-1 as classes
+from skyeng_db.classes
+where class_status in ('succcess', 'failed_by_student')
+group by 1,2
+),
+classes_by_dates_cumsum as ( -- 7 шаг
+select
+ all_dates_by_user.user_id
+ ,dt
+ ,coalesce(classes,0) as classes
+ ,sum(classes) over (partition by all_dates_by_user.user_id order by dt) classes_cs
+from all_dates_by_user
+left join classes_by_dates 
+on all_dates_by_user.user_id = classes_by_dates.user_id
+and dt = class_date
+),
+balances as ( -- шаг 8
+select 
+ payments_by_dates_cumsum.user_id
+ ,dt
+ ,transaction_balance_change
+ ,transaction_balance_change_cs
+ ,classes
+ ,classes_cs
+ ,classes_cs + transaction_balance_change_cs as balance
+ from payments_by_dates_cumsum
+join classes_by_dates_cumsum using (user_id, dt)
+)
+select 
+  dt
+ ,sum(transaction_balance_change) transaction_balance_change
+ ,sum(transaction_balance_change_cs) transaction_balance_change_cs
+ ,sum(classes) classes
+ ,sum(classes_cs) classes_cs
+ ,sum(classes_cs + transaction_balance_change_cs) sum_classes_cs_and_transaction_balance_change_cs
+from balances 
+group by 1
+order by 1
+

@@ -1,2 +1,2 @@
 # SQL
-SQL requests on PostgreSQL
+SQL queries on PostgreSQL
